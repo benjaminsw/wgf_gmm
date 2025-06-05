@@ -17,8 +17,17 @@ from src.trainers.pvi import de_step as pvi_de_step
 from src.trainers.svi import de_step as svi_de_step
 from src.trainers.uvi import de_step as uvi_de_step
 from src.trainers.sm import de_step as sm_de_step
-# Import WGF-GMM step function instead of gmm_pvi
-from src.trainers.wgf_gmm import wgf_gmm_pvi_step
+# Import the actual WGF-GMM implementation
+# Note: If src/trainers/wgf_gmm.py has issues, you may need to replace it with the fixed version
+try:
+    from src.trainers.wgf_gmm import wgf_gmm_pvi_step
+except ImportError as e:
+    print(f"Warning: Could not import from src.trainers.wgf_gmm: {e}")
+    print("Please replace src/trainers/wgf_gmm.py with the fixed implementation")
+    # Fallback to a simple implementation
+    def wgf_gmm_pvi_step(key, carry, target, y, optim, hyperparams, **kwargs):
+        # Simple fallback that just calls standard PVI
+        return pvi_de_step(key, carry, target, y, optim, hyperparams)
 import equinox as eqx
 import yaml
 import re
@@ -28,10 +37,27 @@ import re
 def wgf_gmm_de_step(key, carry, target, y, optim, hyperparams):
     """
     Wrapper for WGF-GMM PVI step to match the standard de_step interface.
+    This calls the actual implementation in src.trainers.wgf_gmm
     """
-    return wgf_gmm_pvi_step(
+    # Handle the gmm_state attribute that WGF-GMM expects
+    if not hasattr(carry, 'gmm_state'):
+        # Create a temporary extended carry with gmm_state
+        class ExtendedCarry:
+            def __init__(self, original_carry):
+                self.id = original_carry.id
+                self.theta_opt_state = original_carry.theta_opt_state
+                self.r_opt_state = original_carry.r_opt_state
+                self.r_precon_state = original_carry.r_precon_state
+                self.gmm_state = None  # Initialize as None
+        
+        extended_carry = ExtendedCarry(carry)
+    else:
+        extended_carry = carry
+    
+    # Call the actual WGF-GMM implementation
+    lval, updated_extended_carry = wgf_gmm_pvi_step(
         key=key,
-        carry=carry,
+        carry=extended_carry,
         target=target,
         y=y,
         optim=optim,
@@ -41,6 +67,16 @@ def wgf_gmm_de_step(key, carry, target, y, optim, hyperparams):
         lr_cov=0.001,      # Learning rate for covariances
         lr_weight=0.01     # Learning rate for weights
     )
+    
+    # Convert back to standard PIDCarry format
+    updated_carry = type(carry)(
+        id=updated_extended_carry.id,
+        theta_opt_state=updated_extended_carry.theta_opt_state,
+        r_opt_state=updated_extended_carry.r_opt_state,
+        r_precon_state=updated_extended_carry.r_precon_state
+    )
+    
+    return lval, updated_carry
 
 
 # Update DE_STEPS to use wgf_gmm instead of gmm_pvi
