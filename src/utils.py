@@ -17,15 +17,35 @@ from src.trainers.pvi import de_step as pvi_de_step
 from src.trainers.svi import de_step as svi_de_step
 from src.trainers.uvi import de_step as uvi_de_step
 from src.trainers.sm import de_step as sm_de_step
+# Import WGF-GMM step function instead of gmm_pvi
+from src.trainers.wgf_gmm import wgf_gmm_pvi_step
 import equinox as eqx
 import yaml
 import re
-# Add this import at the top of src/utils.py
-from src.trainers.gmm_pvi import gmm_de_step
 
-# Update the DE_STEPS dictionary to include gmm_pvi
+
+# Create wrapper function to match the expected interface
+def wgf_gmm_de_step(key, carry, target, y, optim, hyperparams):
+    """
+    Wrapper for WGF-GMM PVI step to match the standard de_step interface.
+    """
+    return wgf_gmm_pvi_step(
+        key=key,
+        carry=carry,
+        target=target,
+        y=y,
+        optim=optim,
+        hyperparams=hyperparams,
+        lambda_reg=0.1,    # Wasserstein regularization strength
+        lr_mean=0.01,      # Learning rate for means
+        lr_cov=0.001,      # Learning rate for covariances
+        lr_weight=0.01     # Learning rate for weights
+    )
+
+
+# Update DE_STEPS to use wgf_gmm instead of gmm_pvi
 DE_STEPS = {'pvi': pvi_de_step,
-            'gmm_pvi': gmm_de_step,  # Add this line
+            'wgf_gmm': wgf_gmm_de_step,  # Use wgf_gmm instead of gmm_pvi
             'svi': svi_de_step,
             'uvi': uvi_de_step,
             'sm': sm_de_step}
@@ -131,7 +151,6 @@ def make_r_precon(r_precon_param: ROptParameters):
     return identity()
 
 
-# Update the make_step_and_carry function to handle gmm_pvi
 def make_step_and_carry(
         key: jax.random.PRNGKey,
         parameters: Parameters,
@@ -154,8 +173,8 @@ def make_step_and_carry(
     
     id_state = eqx.filter(id, id.get_filter_spec())
     
-    # Handle both 'pvi' and 'gmm_pvi' with the same setup
-    if parameters.algorithm in ['pvi', 'gmm_pvi']:
+    # Handle both 'pvi' and 'wgf_gmm' with the same setup
+    if parameters.algorithm in ['pvi', 'wgf_gmm']:
         ropt_key, key = jax.random.split(key, 2)
         r_optim = make_r_opt(ropt_key,
                              parameters.r_opt_parameters)
@@ -212,8 +231,8 @@ def config_to_parameters(config: dict, algorithm: str):
             **config[algorithm]['theta_opt']
         )
     
-    # Handle both 'pvi' and 'gmm_pvi' the same way
-    if algorithm in ['pvi', 'gmm_pvi']:
+    # Handle both 'pvi' and 'wgf_gmm' the same way
+    if algorithm in ['pvi', 'wgf_gmm']:
         parameters['r_opt_parameters'] = ROptParameters(
             **config[algorithm]['r_opt']
         )
