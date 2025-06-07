@@ -48,7 +48,8 @@ class ModelParameters(NamedTuple):
     n_hidden: int = 0
     d_y : int = 0
     kernel: str = 'fixed_diag_norm'
-    n_particles: int=0
+    n_particles: int = 0
+    n_components: int = None  # Add this line
 
 
 class ThetaOptParameters(NamedTuple):
