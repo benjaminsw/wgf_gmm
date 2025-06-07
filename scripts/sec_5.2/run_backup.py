@@ -15,7 +15,6 @@ import pickle
 from ot.sliced import sliced_wasserstein_distance
 import numpy
 from mmdfuse import mmdfuse
-import pandas as pd
 
 
 app = typer.Typer()
@@ -168,15 +167,6 @@ def metrics_fn(key,
             'sliced_w': sliced_w}
 
 
-def extract_components_from_config(config_name):
-    """Extract number of components from config name (e.g., 'toy-paper-run-100' -> '100')"""
-    if '-' in config_name:
-        parts = config_name.split('-')
-        if parts[-1].isdigit():
-            return parts[-1]
-    return 'default'
-
-
 @app.command()
 def run(config_name: str,
         seed: int=2):
@@ -191,9 +181,6 @@ def run(config_name: str,
     compute_metrics = config['experiment']['compute_metrics']
     use_jit = config['experiment']['use_jit']
 
-    # Extract components number from config name
-    components = extract_components_from_config(config_name)
-    
     parent_path = Path(f"output/sec_5.2/{name}")
     key = jax.random.PRNGKey(seed)
     histories = defaultdict(lambda : defaultdict(lambda : defaultdict(list)))
@@ -255,48 +242,14 @@ def run(config_name: str,
 
     results = default_to_regular(results)
     histories = default_to_regular(histories)
-    
-    # Create component-specific filenames
-    results_filename = f'{name}_results_{components}.pkl'
-    histories_filename = f'{name}_histories_{components}.pkl'
-    csv_filename = f'{name}_comparison_{components}.csv'
-    
     try:
-        with open(parent_path / histories_filename, 'wb') as f:
+        with open(parent_path / f'{name}_histories.pkl', 'wb') as f:
             pickle.dump(histories, f)
 
-        with open(parent_path / results_filename, 'wb') as f:
+        with open(parent_path / f'{name}_results.pkl', 'wb') as f:
             pickle.dump(results, f)
     except:
         print("Failed to dump results")
-
-    # Create CSV comparison file
-    csv_data = []
-    for prob_name, problem in PROBLEMS.items():
-        for algo in ALGORITHMS:
-            if algo in results[prob_name].keys():
-                for met_name, run in results[prob_name][algo].items():
-                    if len(run) > 1:
-                        run = np.stack(run, axis=-1)
-                        mean = np.mean(run, axis=-1)
-                        std = np.std(run, axis=-1)
-                    else:
-                        mean = run[0]
-                        std = 0
-                    csv_data.append({
-                        'problem': prob_name,
-                        'algorithm': algo,
-                        'metric': met_name,
-                        'components': components,
-                        'mean': mean,
-                        'std': std
-                    })
-
-    # Save CSV file
-    if csv_data:
-        df = pd.DataFrame(csv_data)
-        df.to_csv(parent_path / csv_filename, index=False)
-        print(f"CSV comparison saved to: {parent_path / csv_filename}")
 
     if compute_metrics:
         for prob_name, problem in PROBLEMS.items():
