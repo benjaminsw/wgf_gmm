@@ -54,15 +54,15 @@ def visualize(key,
             np.exp(log_true_ZZ),
             levels=5,
             colors='black',
-            linewidths=6,
+            linewidths=6)
             #linestyles='dashed',
-            label='True')
+            #label='True')
         c_model = plt.contour(
             np.exp(log_model_ZZ),
             levels=c_true._levels,
             colors='deepskyblue',
-            linewidths=2,
-            label='Model')
+            linewidths=2)
+            #label='Model')
         labels = ['True', 'Model']
         # Fix for matplotlib compatibility
         try:

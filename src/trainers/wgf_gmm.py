@@ -24,9 +24,11 @@ class GMMComponent(NamedTuple):
 
 class GMMState(NamedTuple):
     """State for GMM-based particle representation"""
-    components: jax.Array  # Array instead of list for JAX compatibility
+    means: jax.Array       # Shape: (n_components, d_z)
+    covs: jax.Array        # Shape: (n_components, d_z, d_z)
+    weights: jax.Array     # Shape: (n_components,)
     n_components: int
-    prev_components: jax.Array = None  # For Wasserstein regularization
+    prev_means: jax.Array = None  # For Wasserstein regularization
 
 
 def particles_to_gmm_simple(particles: jax.Array, 
@@ -51,10 +53,12 @@ def particles_to_gmm_simple(particles: jax.Array,
     means = particles  # Shape: (n_particles, d_z)
     covs = np.tile(np.eye(d_z) * 0.1, (n_particles, 1, 1))  # Shape: (n_particles, d_z, d_z)
     
-    # Pack into arrays for JAX compatibility
-    components = np.stack([means, covs.reshape(n_particles, -1), weights], axis=-1)
-    
-    return GMMState(components=components, n_components=n_particles)
+    return GMMState(
+        means=means,
+        covs=covs,
+        weights=weights,
+        n_components=n_particles
+    )
 
 
 def gmm_to_particles(gmm_state: GMMState) -> jax.Array:
@@ -67,9 +71,7 @@ def gmm_to_particles(gmm_state: GMMState) -> jax.Array:
     Returns:
         Array of particle means, shape (n_particles, d_z)
     """
-    # Extract means from the packed components array
-    means = gmm_state.components[:, 0, :]  # Assuming first element is means
-    return means
+    return gmm_state.means
 
 
 def compute_elbo_with_wasserstein_regularization(key: jax.random.PRNGKey,
@@ -97,13 +99,9 @@ def compute_elbo_with_wasserstein_regularization(key: jax.random.PRNGKey,
     
     # Add simple regularization based on particle spread
     wasserstein_reg = 0.0
-    if gmm_state.prev_components is not None:
-        prev_particles = gmm_to_particles(GMMState(
-            components=gmm_state.prev_components,
-            n_components=gmm_state.n_components
-        ))
+    if gmm_state.prev_means is not None:
         # Simple L2 distance as proxy for Wasserstein distance
-        wasserstein_reg = np.mean(np.sum((particles - prev_particles) ** 2, axis=1))
+        wasserstein_reg = np.mean(np.sum((particles - gmm_state.prev_means) ** 2, axis=1))
     
     return elbo - lambda_reg * wasserstein_reg
 
@@ -121,25 +119,18 @@ def update_gmm_simple(gmm_state: GMMState,
         Updated GMM state
     """
     # Extract current means
-    current_means = gmm_to_particles(gmm_state)
+    current_means = gmm_state.means
     
     # Apply updates to means
     new_means = current_means + particle_updates
     
     # Keep covariances and weights the same for simplicity
-    d_z = current_means.shape[1]
-    n_particles = current_means.shape[0]
-    weights = np.ones(n_particles) / n_particles
-    covs = np.tile(np.eye(d_z) * 0.1, (n_particles, 1, 1))
-    
-    # Pack into new components array
-    new_components = np.stack([new_means, covs.reshape(n_particles, -1), weights], axis=-1)
-    
-    # Store current components as previous for next iteration
     return GMMState(
-        components=new_components,
+        means=new_means,
+        covs=gmm_state.covs,
+        weights=gmm_state.weights,
         n_components=gmm_state.n_components,
-        prev_components=gmm_state.components
+        prev_means=gmm_state.means  # Store current as previous for next iteration
     )
 
 
@@ -182,11 +173,11 @@ def wgf_gmm_pvi_step(key: jax.random.PRNGKey,
     )
     
     # Step 2: Convert particles to GMM representation
-    if carry.gmm_state is None:
+    if hasattr(carry, 'gmm_state') and carry.gmm_state is not None:
+        gmm_state = carry.gmm_state
+    else:
         # Initialize GMM from particles
         gmm_state = particles_to_gmm_simple(pid.particles)
-    else:
-        gmm_state = carry.gmm_state
     
     # Step 3: Compute particle gradients with WGF-inspired updates
     def particle_grad_with_wgf(particles):
@@ -206,12 +197,8 @@ def wgf_gmm_pvi_step(key: jax.random.PRNGKey,
         grad_standard = vmap(jax.grad(lambda p: ediff_score(p, eps)))(particles)
         
         # Add WGF-inspired regularization
-        if gmm_state.prev_components is not None:
-            prev_particles = gmm_to_particles(GMMState(
-                components=gmm_state.prev_components,
-                n_components=gmm_state.n_components
-            ))
-            grad_wgf = lambda_reg * (particles - prev_particles)
+        if gmm_state.prev_means is not None:
+            grad_wgf = lambda_reg * (particles - gmm_state.prev_means)
         else:
             grad_wgf = np.zeros_like(particles)
         
@@ -239,7 +226,6 @@ def wgf_gmm_pvi_step(key: jax.random.PRNGKey,
     updated_gmm_state = update_gmm_simple(gmm_state, update)
     
     # Create updated carry with GMM state
-    # We need to handle the gmm_state attribute
     class UpdatedCarry:
         def __init__(self, id, theta_opt_state, r_opt_state, r_precon_state, gmm_state):
             self.id = id
@@ -257,3 +243,73 @@ def wgf_gmm_pvi_step(key: jax.random.PRNGKey,
     )
     
     return lval, updated_carry
+
+
+# Simplified version for GMM-PVI that's more stable
+def gmm_pvi_step(key: jax.random.PRNGKey,
+                 carry: PIDCarry,
+                 target: Target,
+                 y: jax.Array,
+                 optim: PIDOpt,
+                 hyperparams: PIDParameters) -> Tuple[float, PIDCarry]:
+    """
+    Simplified GMM-PVI step that just adds slight regularization to standard PVI.
+    This version avoids the complex GMM state management.
+    """
+    from src.trainers.pvi import de_particle_grad, de_loss
+    
+    theta_key, r_key = jax.random.split(key, 2)
+    
+    # Standard conditional parameter (theta) update
+    def loss(key, params, static):
+        return de_loss(key, params, static, target, y, hyperparams)
+    
+    lval, pid, theta_opt_state = loss_step(
+        theta_key,
+        loss,
+        carry.id,
+        optim.theta_optim,
+        carry.theta_opt_state,
+    )
+    
+    # Modified particle step with slight regularization
+    def regularized_particle_grad(particles):
+        # Standard PVI gradient
+        standard_grad = de_particle_grad(
+            r_key,
+            pid,
+            target,
+            particles,
+            y,
+            hyperparams.mc_n_samples
+        )
+        
+        # Add slight L2 regularization to keep particles from spreading too much
+        reg_strength = 0.01
+        regularization = reg_strength * particles
+        
+        return standard_grad + regularization
+    
+    g_grad, r_precon_state = optim.r_precon.update(
+        pid.particles,
+        regularized_particle_grad,
+        carry.r_precon_state,
+    )
+    
+    update, r_opt_state = optim.r_optim.update(
+        g_grad,
+        carry.r_opt_state,
+        params=pid.particles,
+        index=y
+    )
+    
+    pid = eqx.tree_at(lambda tree: tree.particles, pid, pid.particles + update)
+    
+    carry = PIDCarry(
+        id=pid,
+        theta_opt_state=theta_opt_state,
+        r_opt_state=r_opt_state,
+        r_precon_state=r_precon_state
+    )
+    
+    return lval, carry

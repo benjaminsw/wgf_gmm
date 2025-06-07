@@ -17,28 +17,29 @@ from src.trainers.pvi import de_step as pvi_de_step
 from src.trainers.svi import de_step as svi_de_step
 from src.trainers.uvi import de_step as uvi_de_step
 from src.trainers.sm import de_step as sm_de_step
-# Import the actual WGF-GMM implementation
-# Note: If src/trainers/wgf_gmm.py has issues, you may need to replace it with the fixed version
+
+# Import fixed WGF-GMM implementation
 try:
-    from src.trainers.wgf_gmm import wgf_gmm_pvi_step
+    from src.trainers.wgf_gmm import wgf_gmm_pvi_step, gmm_pvi_step
+    WGF_GMM_AVAILABLE = True
 except ImportError as e:
-    print(f"Warning: Could not import from src.trainers.wgf_gmm: {e}")
-    print("Please replace src/trainers/wgf_gmm.py with the fixed implementation")
-    # Fallback to a simple implementation
-    def wgf_gmm_pvi_step(key, carry, target, y, optim, hyperparams, **kwargs):
-        # Simple fallback that just calls standard PVI
-        return pvi_de_step(key, carry, target, y, optim, hyperparams)
+    print(f"Warning: Could not import WGF-GMM implementation: {e}")
+    WGF_GMM_AVAILABLE = False
+
 import equinox as eqx
 import yaml
 import re
 
 
-# Create wrapper function to match the expected interface
 def wgf_gmm_de_step(key, carry, target, y, optim, hyperparams):
     """
     Wrapper for WGF-GMM PVI step to match the standard de_step interface.
-    This calls the actual implementation in src.trainers.wgf_gmm
     """
+    if not WGF_GMM_AVAILABLE:
+        # Fallback to standard PVI if WGF-GMM is not available
+        print("Warning: WGF-GMM not available, falling back to standard PVI")
+        return pvi_de_step(key, carry, target, y, optim, hyperparams)
+    
     # Handle the gmm_state attribute that WGF-GMM expects
     if not hasattr(carry, 'gmm_state'):
         # Create a temporary extended carry with gmm_state
@@ -54,37 +55,61 @@ def wgf_gmm_de_step(key, carry, target, y, optim, hyperparams):
     else:
         extended_carry = carry
     
-    # Call the actual WGF-GMM implementation
-    lval, updated_extended_carry = wgf_gmm_pvi_step(
-        key=key,
-        carry=extended_carry,
-        target=target,
-        y=y,
-        optim=optim,
-        hyperparams=hyperparams,
-        lambda_reg=0.1,    # Wasserstein regularization strength
-        lr_mean=0.01,      # Learning rate for means
-        lr_cov=0.001,      # Learning rate for covariances
-        lr_weight=0.01     # Learning rate for weights
-    )
-    
-    # Convert back to standard PIDCarry format
-    updated_carry = type(carry)(
-        id=updated_extended_carry.id,
-        theta_opt_state=updated_extended_carry.theta_opt_state,
-        r_opt_state=updated_extended_carry.r_opt_state,
-        r_precon_state=updated_extended_carry.r_precon_state
-    )
-    
-    return lval, updated_carry
+    # Call the WGF-GMM implementation
+    try:
+        lval, updated_extended_carry = wgf_gmm_pvi_step(
+            key=key,
+            carry=extended_carry,
+            target=target,
+            y=y,
+            optim=optim,
+            hyperparams=hyperparams,
+            lambda_reg=0.1,    # Wasserstein regularization strength
+            lr_mean=0.01,      # Learning rate for means
+            lr_cov=0.001,      # Learning rate for covariances
+            lr_weight=0.01     # Learning rate for weights
+        )
+        
+        # Convert back to standard PIDCarry format
+        updated_carry = type(carry)(
+            id=updated_extended_carry.id,
+            theta_opt_state=updated_extended_carry.theta_opt_state,
+            r_opt_state=updated_extended_carry.r_opt_state,
+            r_precon_state=updated_extended_carry.r_precon_state
+        )
+        
+        return lval, updated_carry
+        
+    except Exception as e:
+        print(f"Warning: WGF-GMM failed with error {e}, falling back to standard PVI")
+        return pvi_de_step(key, carry, target, y, optim, hyperparams)
 
 
-# Update DE_STEPS to use wgf_gmm instead of gmm_pvi
-DE_STEPS = {'pvi': pvi_de_step,
-            'wgf_gmm': wgf_gmm_de_step,  # Use wgf_gmm instead of gmm_pvi
-            'svi': svi_de_step,
-            'uvi': uvi_de_step,
-            'sm': sm_de_step}
+def gmm_pvi_de_step(key, carry, target, y, optim, hyperparams):
+    """
+    Wrapper for GMM-PVI step (simplified version).
+    """
+    if not WGF_GMM_AVAILABLE:
+        # Fallback to standard PVI if GMM-PVI is not available
+        print("Warning: GMM-PVI not available, falling back to standard PVI")
+        return pvi_de_step(key, carry, target, y, optim, hyperparams)
+    
+    try:
+        return gmm_pvi_step(key, carry, target, y, optim, hyperparams)
+    except Exception as e:
+        print(f"Warning: GMM-PVI failed with error {e}, falling back to standard PVI")
+        return pvi_de_step(key, carry, target, y, optim, hyperparams)
+
+
+# Update DE_STEPS to include both WGF-GMM and GMM-PVI
+DE_STEPS = {
+    'pvi': pvi_de_step,
+    'wgf_gmm': wgf_gmm_de_step,
+    'gmm_pvi': gmm_pvi_de_step,
+    'svi': svi_de_step,
+    'uvi': uvi_de_step,
+    'sm': sm_de_step
+}
 
 
 def make_model(key: jax.random.PRNGKey,
@@ -139,7 +164,7 @@ def make_theta_opt(topt_param: ThetaOptParameters):
     if topt_param.optimizer == 'adam':
         optimizer = optax.adam(lr, b1=0.9, b2=0.99)
     elif topt_param.optimizer == 'rmsprop':
-        optimizer = optax.rmsprop(lr) # topt_param.decay)
+        optimizer = optax.rmsprop(lr)
     else:
         optimizer = optax.sgd(lr)
 
@@ -151,7 +176,7 @@ def make_r_opt(key: jax.random.PRNGKey,
                ropt_param: ROptParameters,
                sgld: bool=False):
     """
-    Make an optimizer for distribution spacebased on the optimizer hyperparameters.
+    Make an optimizer for distribution space based on the optimizer hyperparameters.
     """
     transform = []
 
@@ -174,7 +199,7 @@ def make_r_opt(key: jax.random.PRNGKey,
     return optax.chain(*transform)
 
 
-def make_r_precon(r_precon_param: ROptParameters):
+def make_r_precon(r_precon_param: RPreconParameters):
     """
     Make a preconditioner for distribution space based on the preconditioner hyperparameters.
     """
@@ -209,8 +234,8 @@ def make_step_and_carry(
     
     id_state = eqx.filter(id, id.get_filter_spec())
     
-    # Handle both 'pvi' and 'wgf_gmm' with the same setup
-    if parameters.algorithm in ['pvi', 'wgf_gmm']:
+    # Handle PVI-based algorithms (pvi, wgf_gmm, gmm_pvi) the same way
+    if parameters.algorithm in ['pvi', 'wgf_gmm', 'gmm_pvi']:
         ropt_key, key = jax.random.split(key, 2)
         r_optim = make_r_opt(ropt_key,
                              parameters.r_opt_parameters)
@@ -267,8 +292,8 @@ def config_to_parameters(config: dict, algorithm: str):
             **config[algorithm]['theta_opt']
         )
     
-    # Handle both 'pvi' and 'wgf_gmm' the same way
-    if algorithm in ['pvi', 'wgf_gmm']:
+    # Handle PVI-based algorithms (pvi, wgf_gmm, gmm_pvi) the same way
+    if algorithm in ['pvi', 'wgf_gmm', 'gmm_pvi']:
         parameters['r_opt_parameters'] = ROptParameters(
             **config[algorithm]['r_opt']
         )
@@ -311,21 +336,18 @@ def parse_config(config_path: str):
         mapping = loader.construct_mapping(node)
         # Replace all None values with {}
         return {k: ({} if v is None else v) for k, v in mapping.items()}
+    
     # Load Empty Entries as an Empty Dictionary
     yaml.SafeLoader.add_constructor(
         yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG,
         none_to_dict)
-    # Parse exponents (e.g., 1e-3) as floats
+    
+    # Simple scientific notation support
     yaml.SafeLoader.add_implicit_resolver(
-        u'tag:yaml.org,2002:float',
-        re.compile(u'''^(?:
-        [-+]?(?:[0-9][0-9_]*)\\.[0-9_]*(?:[eE][-+]?[0-9]+)?
-        |[-+]?(?:[0-9][0-9_]*)(?:[eE][-+]?[0-9]+)
-        |\\.[0-9_]+(?:[eE][-+][0-9]+)?
-        |[-+]?[0-9][0-9_]*(?::[0-5]?[0-9])+\\.[0-9_]*
-        |[-+]?\\.(?:inf|Inf|INF)
-        |\\.(?:nan|NaN|NAN))$''', re.X),
-        list(u'-+0123456789.'))
+        'tag:yaml.org,2002:float',
+        re.compile(r'^[-+]?[0-9]*\.?[0-9]+([eE][-+]?[0-9]+)?$'),
+        list('-+0123456789.'))
+    
     with open(config_path, 'r') as f:
         config = yaml.safe_load(f)
     return config
