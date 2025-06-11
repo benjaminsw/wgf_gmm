@@ -1,4 +1,3 @@
-# Updated src/trainers/wgf_gmm.py
 import jax
 from jax import vmap, grad
 import jax.numpy as np
@@ -29,25 +28,6 @@ class GMMState(NamedTuple):
     components: list[GMMComponent]  # List of Gaussian components
     n_components: int
     prev_components: list[GMMComponent] = None  # For Wasserstein regularization
-
-
-class WGFGMMHyperparams(NamedTuple):
-    """Hyperparameters for WGF-GMM training"""
-    lambda_reg: float = 0.1     # Wasserstein regularization strength
-    lr_mean: float = 0.01       # Learning rate for means
-    lr_cov: float = 0.001       # Learning rate for covariances
-    lr_weight: float = 0.01     # Learning rate for weights
-
-
-class WGFGMMMetrics(NamedTuple):
-    """Metrics for WGF-GMM training"""
-    elbo: float
-    elbo_with_wasserstein: float
-    wasserstein_distance: float
-    lambda_reg: float
-    lr_mean: float
-    lr_cov: float
-    lr_weight: float
 
 
 def particles_to_gmm(particles: jax.Array, 
@@ -452,45 +432,15 @@ def sinkhorn_weights_update(weights: jax.Array, grad_weights: jax.Array,
     return weights_new
 
 
-def compute_elbo(key: jax.random.PRNGKey,
-                 pid: PID,
-                 target: Target,
-                 gmm_state: GMMState,
-                 y: jax.Array,
-                 hyperparams: PIDParameters) -> float:
-    """
-    Compute standard ELBO without regularization.
-    
-    Args:
-        key: PRNG key
-        pid: PID object
-        target: Target distribution
-        gmm_state: Current GMM state
-        y: Observations
-        hyperparams: PID parameters
-        
-    Returns:
-        ELBO value
-    """
-    key, subkey = jax.random.split(key)
-    samples = sample_from_gmm(subkey, gmm_state, hyperparams.mc_n_samples)
-    
-    logq = vmap(pid.log_prob, (0, None))(samples, y)
-    logp = vmap(target.log_prob, (0, None))(samples, y)
-    elbo = np.mean(logp - logq)
-    
-    return elbo
-
-
 def compute_elbo_with_wasserstein_regularization(key: jax.random.PRNGKey,
                                                pid: PID,
                                                target: Target,
                                                gmm_state: GMMState,
                                                y: jax.Array,
                                                hyperparams: PIDParameters,
-                                               lambda_reg: float = 0.1) -> Tuple[float, float]:
+                                               lambda_reg: float = 0.1) -> float:
     """
-    Compute regularized ELBO and return both ELBO with regularization and Wasserstein distance.
+    Compute regularized ELBO: F(r) = ELBO(r) - λ * W₂²(r, r_prev)
     
     Args:
         key: PRNG key
@@ -502,12 +452,18 @@ def compute_elbo_with_wasserstein_regularization(key: jax.random.PRNGKey,
         lambda_reg: Wasserstein regularization strength
         
     Returns:
-        Tuple of (elbo_with_regularization, wasserstein_distance)
+        Regularized ELBO value
     """
-    # Compute standard ELBO
-    elbo = compute_elbo(key, pid, target, gmm_state, y, hyperparams)
+    # Sample from GMM
+    key, subkey = jax.random.split(key)
+    samples = sample_from_gmm(subkey, gmm_state, hyperparams.mc_n_samples)
     
-    # Compute Wasserstein regularization if previous state exists
+    # Compute standard ELBO terms
+    logq = vmap(pid.log_prob, (0, None))(samples, y)
+    logp = vmap(target.log_prob, (0, None))(samples, y)
+    elbo = np.mean(logp - logq)
+    
+    # Add Wasserstein regularization if previous state exists
     wasserstein_reg = 0.0
     if gmm_state.prev_components is not None:
         prev_gmm = GMMState(
@@ -516,9 +472,7 @@ def compute_elbo_with_wasserstein_regularization(key: jax.random.PRNGKey,
         )
         wasserstein_reg = wasserstein_distance_gmm(gmm_state, prev_gmm)
     
-    elbo_with_regularization = elbo - lambda_reg * wasserstein_reg
-    
-    return elbo_with_regularization, wasserstein_reg
+    return elbo - lambda_reg * wasserstein_reg
 
 
 def sample_from_gmm(key: jax.random.PRNGKey, gmm_state: GMMState, 
@@ -566,7 +520,7 @@ def compute_gmm_gradients(key: jax.random.PRNGKey,
                          hyperparams: PIDParameters,
                          lambda_reg: float = 0.1) -> Tuple[list, list, jax.Array]:
     """
-    Compute gradients for GMM parameters using REINFORCE/reparameterization.
+    Compute gradients for GMM parameters using REINFORCE currently/ as for reparameterization through Gumbel-Softmax(???)
     
     Returns:
         Tuple of (mean_grads, cov_grads, weight_grads)
@@ -584,10 +538,9 @@ def compute_gmm_gradients(key: jax.random.PRNGKey,
             prev_components=gmm_state.prev_components
         )
         
-        elbo_with_reg, _ = compute_elbo_with_wasserstein_regularization(
+        return compute_elbo_with_wasserstein_regularization(
             key, pid, target, temp_gmm, y, hyperparams, lambda_reg
         )
-        return elbo_with_reg
     
     # Extract current parameters
     means = np.stack([comp.mean for comp in gmm_state.components])
@@ -605,7 +558,9 @@ def update_gmm_parameters(gmm_state: GMMState,
                          mean_grads: list,
                          cov_grads: list,
                          weight_grads: jax.Array,
-                         wgf_hyperparams: WGFGMMHyperparams) -> GMMState:
+                         lr_mean: float = 0.01,
+                         lr_cov: float = 0.001,
+                         lr_weight: float = 0.01) -> GMMState:
     """
     Update GMM parameters using Riemannian gradients and Sinkhorn steps.
     
@@ -614,7 +569,9 @@ def update_gmm_parameters(gmm_state: GMMState,
         mean_grads: Gradients for means
         cov_grads: Gradients for covariances
         weight_grads: Gradients for weights
-        wgf_hyperparams: WGF-GMM hyperparameters
+        lr_mean: Learning rate for means
+        lr_cov: Learning rate for covariances
+        lr_weight: Learning rate for weights
         
     Returns:
         Updated GMM state
@@ -625,16 +582,16 @@ def update_gmm_parameters(gmm_state: GMMState,
     current_weights = np.array([comp.weight for comp in gmm_state.components])
     
     # Update weights using Sinkhorn
-    new_weights = sinkhorn_weights_update(current_weights, weight_grads, wgf_hyperparams.lr_weight)
+    new_weights = sinkhorn_weights_update(current_weights, weight_grads, lr_weight)
     
     # Update each component
     for i, comp in enumerate(gmm_state.components):
         # Update mean using Euclidean gradient (Riemannian = Euclidean for means)
-        new_mean = comp.mean - wgf_hyperparams.lr_mean * riemannian_grad_mean(comp.mean, mean_grads[i])
+        new_mean = comp.mean - lr_mean * riemannian_grad_mean(comp.mean, mean_grads[i])
         
         # Update covariance using Riemannian gradient
         riem_grad_cov = riemannian_grad_cov(cov_grads[i], comp.cov)
-        new_cov = retraction_cov(comp.cov, -wgf_hyperparams.lr_cov * riem_grad_cov)
+        new_cov = retraction_cov(comp.cov, -lr_cov * riem_grad_cov)
         
         # Create new component
         new_components.append(GMMComponent(
@@ -657,7 +614,10 @@ def wgf_gmm_pvi_step(key: jax.random.PRNGKey,
                     y: jax.Array,
                     optim: PIDOpt,
                     hyperparams: PIDParameters,
-                    wgf_hyperparams: WGFGMMHyperparams = None) -> Tuple[float, PIDCarry]:
+                    lambda_reg: float = 0.1,
+                    lr_mean: float = 0.01,
+                    lr_cov: float = 0.001,
+                    lr_weight: float = 0.01) -> Tuple[float, PIDCarry]:
     """
     Full WGF-GMM with PVI step following the PDF specification.
     
@@ -675,14 +635,14 @@ def wgf_gmm_pvi_step(key: jax.random.PRNGKey,
         y: Observations
         optim: PID optimizer
         hyperparams: PID parameters
-        wgf_hyperparams: WGF-GMM specific hyperparameters
+        lambda_reg: Wasserstein regularization strength
+        lr_mean: Learning rate for means
+        lr_cov: Learning rate for covariances
+        lr_weight: Learning rate for weights
         
     Returns:
         Tuple of (loss_value, updated_carry)
     """
-    if wgf_hyperparams is None:
-        wgf_hyperparams = WGFGMMHyperparams()
-    
     theta_key, r_key, grad_key = jax.random.split(key, 3)
     
     # Step 1: Standard conditional parameter (theta) update
@@ -711,12 +671,13 @@ def wgf_gmm_pvi_step(key: jax.random.PRNGKey,
     
     # Step 3: Compute gradients for GMM parameters
     mean_grads, cov_grads, weight_grads = compute_gmm_gradients(
-        grad_key, pid, target, gmm_state, y, hyperparams, wgf_hyperparams.lambda_reg
+        grad_key, pid, target, gmm_state, y, hyperparams, lambda_reg
     )
     
     # Step 4: Update GMM parameters using WGF
     updated_gmm_state = update_gmm_parameters(
-        gmm_state, mean_grads, cov_grads, weight_grads, wgf_hyperparams
+        gmm_state, mean_grads, cov_grads, weight_grads,
+        lr_mean, lr_cov, lr_weight
     )
     
     # Step 5: Convert back to particle representation for compatibility
@@ -737,312 +698,10 @@ def wgf_gmm_pvi_step(key: jax.random.PRNGKey,
     return lval, updated_carry
 
 
-def wgf_gmm_pvi_step_with_monitoring(key: jax.random.PRNGKey,
-                                   carry: PIDCarry,
-                                   target: Target,
-                                   y: jax.Array,
-                                   optim: PIDOpt,
-                                   hyperparams: PIDParameters,
-                                   wgf_hyperparams: WGFGMMHyperparams = None) -> Tuple[float, PIDCarry, WGFGMMMetrics]:
-    """
-    WGF-GMM step with detailed monitoring of ELBO and Wasserstein metrics.
-    
-    Returns:
-        Tuple of (loss_value, updated_carry, metrics)
-    """
-    if wgf_hyperparams is None:
-        wgf_hyperparams = WGFGMMHyperparams()
-    
-    theta_key, r_key, grad_key, metrics_key = jax.random.split(key, 4)
-    
-    # Step 1: Standard conditional parameter (theta) update
-    def loss(key, params, static):
-        pid = eqx.combine(params, static)
-        _samples = pid.sample(key, hyperparams.mc_n_samples, None)
-        logq = vmap(eqx.combine(stop_gradient(params), static).log_prob, (0, None))(_samples, None)
-        logp = vmap(target.log_prob, (0, None))(_samples, y)
-        return np.mean(logq - logp, axis=0)
-    
-    # Update conditional parameters (theta)
-    lval, pid, theta_opt_state = loss_step(
-        theta_key,
-        loss,
-        carry.id,
-        optim.theta_optim,
-        carry.theta_opt_state,
-    )
-    
-    # Step 2: Convert particles to GMM representation
-    if not hasattr(carry, 'gmm_state') or carry.gmm_state is None:
-        gmm_state = particles_to_gmm(pid.particles, use_em=True, n_components=None)
-    else:
-        gmm_state = carry.gmm_state
-    
-    # Step 3: Compute metrics before update
-    elbo = compute_elbo(metrics_key, pid, target, gmm_state, y, hyperparams)
-    elbo_with_reg, wasserstein_dist = compute_elbo_with_wasserstein_regularization(
-        metrics_key, pid, target, gmm_state, y, hyperparams, wgf_hyperparams.lambda_reg
-    )
-    
-    # Step 4: Compute gradients for GMM parameters
-    mean_grads, cov_grads, weight_grads = compute_gmm_gradients(
-        grad_key, pid, target, gmm_state, y, hyperparams, wgf_hyperparams.lambda_reg
-    )
-    
-    # Step 5: Update GMM parameters using WGF
-    updated_gmm_state = update_gmm_parameters(
-        gmm_state, mean_grads, cov_grads, weight_grads, wgf_hyperparams
-    )
-    
-    # Step 6: Convert back to particle representation for compatibility
-    updated_particles = gmm_to_particles(updated_gmm_state)
-    pid = eqx.tree_at(lambda tree: tree.particles, pid, updated_particles)
-    
-    # Create updated carry with GMM state
-    updated_carry = PIDCarry(
-        id=pid,
-        theta_opt_state=theta_opt_state,
-        r_opt_state=carry.r_opt_state,
-        r_precon_state=carry.r_precon_state
-    )
-    
-    # Store GMM state in carry
-    updated_carry.gmm_state = updated_gmm_state
-    
-    # Create metrics object
-    metrics = WGFGMMMetrics(
-        elbo=elbo,
-        elbo_with_wasserstein=elbo_with_reg,
-        wasserstein_distance=wasserstein_dist,
-        lambda_reg=wgf_hyperparams.lambda_reg,
-        lr_mean=wgf_hyperparams.lr_mean,
-        lr_cov=wgf_hyperparams.lr_cov,
-        lr_weight=wgf_hyperparams.lr_weight
-    )
-    
-    return lval, updated_carry, metrics
 
-
-# Wrapper function for compatibility with existing experiment framework
-def wgf_gmm_step_with_config(key: jax.random.PRNGKey,
-                            carry: PIDCarry,
-                            target: Target,
-                            y: jax.Array,
-                            optim: PIDOpt,
-                            hyperparams: PIDParameters,
-                            lambda_reg: float = 0.1,
-                            lr_mean: float = 0.01,
-                            lr_cov: float = 0.001,
-                            lr_weight: float = 0.01) -> Tuple[float, PIDCarry]:
-    """
-    Wrapper for WGF-GMM step that accepts individual hyperparameters for easy configuration.
-    """
-    wgf_hyperparams = WGFGMMHyperparams(
-        lambda_reg=lambda_reg,
-        lr_mean=lr_mean,
-        lr_cov=lr_cov,
-        lr_weight=lr_weight
-    )
-    
-    return wgf_gmm_pvi_step(key, carry, target, y, optim, hyperparams, wgf_hyperparams)
-
-
-# Alternative step function for systematic hyperparameter search
-def create_wgf_gmm_step_function(lambda_reg: float = 0.1,
-                                 lr_mean: float = 0.01,
-                                 lr_cov: float = 0.001,
-                                 lr_weight: float = 0.01):
-    """
-    Factory function to create WGF-GMM step functions with fixed hyperparameters.
-    
-    This is useful for systematic hyperparameter search where you want to create
-    multiple step functions with different hyperparameter settings.
-    """
-    wgf_hyperparams = WGFGMMHyperparams(
-        lambda_reg=lambda_reg,
-        lr_mean=lr_mean,
-        lr_cov=lr_cov,
-        lr_weight=lr_weight
-    )
-    
-    def step_fn(key, carry, target, y, optim, hyperparams):
-        return wgf_gmm_pvi_step(key, carry, target, y, optim, hyperparams, wgf_hyperparams)
-    
-    return step_fn
-
-
-# Integration with the existing DE_STEPS dictionary
-def get_wgf_gmm_step_with_hyperparams(config_dict: dict = None):
-    """
-    Get a WGF-GMM step function configured with hyperparameters from a config dictionary.
-    
-    Args:
-        config_dict: Dictionary containing 'wgf_gmm_params' with hyperparameters
-        
-    Returns:
-        Configured step function
-    """
-    if config_dict and 'wgf_gmm_params' in config_dict:
-        wgf_params = config_dict['wgf_gmm_params']
-        return create_wgf_gmm_step_function(
-            lambda_reg=wgf_params.get('lambda_reg', 0.1),
-            lr_mean=wgf_params.get('lr_mean', 0.01),
-            lr_cov=wgf_params.get('lr_cov', 0.001),
-            lr_weight=wgf_params.get('lr_weight', 0.01)
-        )
-    else:
-        # Return default configuration
-        return create_wgf_gmm_step_function()
-
-
-# Enhanced step function for systematic experiments with different hyperparameter sets
-def run_wgf_gmm_with_multiple_configs(key: jax.random.PRNGKey,
-                                     initial_carry: PIDCarry,
-                                     target: Target,
-                                     optim: PIDOpt,
-                                     hyperparams: PIDParameters,
-                                     n_updates: int,
-                                     hyperparam_configs: list,
-                                     save_results: bool = True,
-                                     output_dir: str = "output/wgf_gmm_configs"):
-    """
-    Run WGF-GMM with multiple hyperparameter configurations and save results.
-    
-    Args:
-        key: PRNG key
-        initial_carry: Initial carry state
-        target: Target distribution
-        optim: Optimizer
-        hyperparams: Base hyperparameters
-        n_updates: Number of updates per configuration
-        hyperparam_configs: List of WGFGMMHyperparams configurations
-        save_results: Whether to save results to files
-        output_dir: Directory to save results
-        
-    Returns:
-        Dictionary with results for each configuration
-    """
-    from pathlib import Path
-    import pickle
-    
-    results = {}
-    
-    for i, wgf_config in enumerate(hyperparam_configs):
-        print(f"Running configuration {i+1}/{len(hyperparam_configs)}: {wgf_config}")
-        
-        # Reset carry for each configuration
-        carry = initial_carry
-        config_key = key
-        
-        # Storage for this configuration
-        losses = []
-        
-        for update_idx in range(n_updates):
-            config_key, step_key = jax.random.split(config_key)
-            
-            lval, carry = wgf_gmm_pvi_step(
-                step_key, carry, target, None, optim, hyperparams, wgf_config
-            )
-            
-            losses.append(float(lval))
-            
-            if (update_idx + 1) % 100 == 0:
-                print(f"  Step {update_idx + 1}/{n_updates}, Loss: {lval:.4f}")
-        
-        # Store results
-        config_id = f"lambda{wgf_config.lambda_reg}_mean{wgf_config.lr_mean}_cov{wgf_config.lr_cov}_weight{wgf_config.lr_weight}"
-        results[config_id] = {
-            'config': wgf_config,
-            'losses': losses,
-            'final_loss': losses[-1],
-            'final_carry': carry
-        }
-        
-        # Save individual results if requested
-        if save_results:
-            output_path = Path(output_dir)
-            output_path.mkdir(parents=True, exist_ok=True)
-            
-            with open(output_path / f"results_{config_id}.pkl", "wb") as f:
-                pickle.dump(results[config_id], f)
-    
-    return results
-
-
-# Simplified function for use in existing experiment framework
-def de_step(key: jax.random.PRNGKey,
-            carry: PIDCarry,
-            target: Target,
-            y: jax.Array,
-            optim: PIDOpt,
-            hyperparams: PIDParameters) -> Tuple[float, PIDCarry]:
-    """
-    Density Estimation Step for WGF-GMM (compatible with existing framework).
-    
-    This function provides the same interface as other trainers in the framework.
-    Uses default hyperparameters unless configured otherwise.
-    """
-    # Check if WGF-GMM hyperparameters are specified in the hyperparams
-    if hasattr(hyperparams, 'wgf_gmm_params'):
-        wgf_hyperparams = WGFGMMHyperparams(**hyperparams.wgf_gmm_params)
-    else:
-        # Use default hyperparameters
-        wgf_hyperparams = WGFGMMHyperparams()
-    
-    return wgf_gmm_pvi_step(key, carry, target, y, optim, hyperparams, wgf_hyperparams)
-
-
-# Function to add WGF-GMM hyperparameters to existing PIDParameters
-def extend_pid_parameters_for_wgf_gmm(pid_params: PIDParameters, 
-                                     lambda_reg: float = 0.1,
-                                     lr_mean: float = 0.01,
-                                     lr_cov: float = 0.001,
-                                     lr_weight: float = 0.01) -> PIDParameters:
-    """
-    Extend existing PIDParameters with WGF-GMM specific hyperparameters.
-    
-    Args:
-        pid_params: Existing PID parameters
-        lambda_reg: Wasserstein regularization strength
-        lr_mean: Learning rate for means
-        lr_cov: Learning rate for covariances
-        lr_weight: Learning rate for weights
-        
-    Returns:
-        Extended PIDParameters with WGF-GMM hyperparameters
-    """
-    # Add WGF-GMM hyperparameters as an attribute
-    extended_params = pid_params
-    extended_params.wgf_gmm_params = {
-        'lambda_reg': lambda_reg,
-        'lr_mean': lr_mean,
-        'lr_cov': lr_cov,
-        'lr_weight': lr_weight
-    }
-    
-    return extended_params
-
-
-# Utility function for config parsing
-def parse_wgf_gmm_config(config: dict) -> WGFGMMHyperparams:
-    """
-    Parse WGF-GMM hyperparameters from a configuration dictionary.
-    
-    Args:
-        config: Configuration dictionary
-        
-    Returns:
-        WGFGMMHyperparams object
-    """
-    wgf_params = config.get('wgf_gmm_params', {})
-    
-    return WGFGMMHyperparams(
-        lambda_reg=wgf_params.get('lambda_reg', 0.1),
-        lr_mean=wgf_params.get('lr_mean', 0.01),
-        lr_cov=wgf_params.get('lr_cov', 0.001),
-        lr_weight=wgf_params.get('lr_weight', 0.01)
-    )
-
-
-# Alias for backward compatibility
-wgf_gmm_de_step = de_step
+# contribute 3
+# drop during training:
+# Use a sparsity penalty (e.g., encourage some weights to go to zero),
+# Use Dirichlet priors that push some weights down,
+# Gradually fade out low-importance components (soft masking)
+# WGMM???
