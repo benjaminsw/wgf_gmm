@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Fixed WGF-GMM Experiment Runner
-Simplified version that works with the existing framework.
+Works with the existing framework and available functions.
 """
 
 import jax
@@ -13,18 +13,20 @@ import pandas as pd
 import pickle
 from collections import defaultdict
 from itertools import product
+import sys
 
 # Import your existing modules
 from src.problems.toy import Banana, Multimodal, XShape
 from src.utils import make_step_and_carry, config_to_parameters, parse_config
 from src.base import Parameters, ModelParameters, ThetaOptParameters, ROptParameters, PIDParameters
 
-# Import the fixed WGF-GMM implementation
+# Import the WGF-GMM implementation
 try:
     from src.trainers.wgf_gmm import (
         wgf_gmm_pvi_step_with_monitoring,
         WGFGMMMetrics,
-        WGFGMMHyperparams
+        WGFGMMHyperparams,
+        wgf_gmm_pvi_step
     )
     WGF_GMM_AVAILABLE = True
 except ImportError as e:
@@ -70,7 +72,7 @@ def test_single_config():
     init_key, train_key = jax.random.split(key)
     step, carry = make_step_and_carry(init_key, parameters, target)
     
-    # Extract optim from step function
+    # Extract optim from step function  
     optim = None
     if hasattr(step, 'keywords') and 'optim' in step.keywords:
         optim = step.keywords['optim']
@@ -555,7 +557,6 @@ def create_summary_analysis(all_results, output_dir):
 
 def main():
     """Main function to handle different experiment modes."""
-    import sys
     
     print("WGF-GMM Hyperparameter Experiments")
     print("=" * 50)

@@ -1,0 +1,177 @@
+# WGF-GMM Configuration File
+# This configuration file contains optimized hyperparameters for WGF-GMM experiments
+
+default_parameters: &default_parameters
+    d_z: 2
+    kernel: 'norm_fixed_var_w_skip'
+    n_hidden: 512
+
+default_theta_lr: &default_theta_lr
+    lr: 1e-4
+
+experiment:
+    n_reruns: 5
+    n_updates: 1000
+    name: 'wgf_gmm_test'
+    compute_metrics: True
+    use_jit: True
+
+# Standard PVI for comparison
+pvi:
+    algorithm: 'pvi'
+    model: 
+        use_particles: True
+        n_particles: 100
+        <<: *default_parameters
+    theta_opt:
+        <<: *default_theta_lr
+        optimizer: 'rmsprop'
+        lr_decay: False
+        regularization: 1e-8
+        clip: False
+    r_opt:
+        lr: 1e-2
+        regularization: 1e-8
+    r_precon:
+        type: 'rms'
+        max_norm: 1.
+        agg: 'mean'
+    extra_alg:
+        mc_n_samples: 250
+
+# WGF-GMM with conservative hyperparameters
+wgf_gmm_conservative:
+    algorithm: 'wgf_gmm'
+    model: 
+        use_particles: True
+        n_particles: 100
+        <<: *default_parameters
+    theta_opt:
+        <<: *default_theta_lr
+        optimizer: 'rmsprop'
+        lr_decay: False
+        regularization: 1e-8
+        clip: False
+    r_opt:
+        lr: 1e-2
+        regularization: 1e-8
+    r_precon:
+        type: 'rms'
+        max_norm: 1.
+        agg: 'mean'
+    wgf_gmm_params:
+        lambda_reg: 0.05      # Conservative Wasserstein regularization
+        lr_mean: 0.005        # Conservative learning rate for means
+        lr_cov: 0.0005        # Conservative learning rate for covariances
+        lr_weight: 0.005      # Conservative learning rate for weights
+    extra_alg:
+        mc_n_samples: 250
+
+# WGF-GMM with moderate hyperparameters
+wgf_gmm_moderate:
+    algorithm: 'wgf_gmm'
+    model: 
+        use_particles: True
+        n_particles: 100
+        <<: *default_parameters
+    theta_opt:
+        <<: *default_theta_lr
+        optimizer: 'rmsprop'
+        lr_decay: False
+        regularization: 1e-8
+        clip: False
+    r_opt:
+        lr: 1e-2
+        regularization: 1e-8
+    r_precon:
+        type: 'rms'
+        max_norm: 1.
+        agg: 'mean'
+    wgf_gmm_params:
+        lambda_reg: 0.1       # Moderate Wasserstein regularization
+        lr_mean: 0.01         # Moderate learning rate for means
+        lr_cov: 0.001         # Moderate learning rate for covariances
+        lr_weight: 0.01       # Moderate learning rate for weights
+    extra_alg:
+        mc_n_samples: 250
+
+# WGF-GMM with aggressive hyperparameters
+wgf_gmm_aggressive:
+    algorithm: 'wgf_gmm'
+    model: 
+        use_particles: True
+        n_particles: 100
+        <<: *default_parameters
+    theta_opt:
+        <<: *default_theta_lr
+        optimizer: 'rmsprop'
+        lr_decay: False
+        regularization: 1e-8
+        clip: False
+    r_opt:
+        lr: 1e-2
+        regularization: 1e-8
+    r_precon:
+        type: 'rms'
+        max_norm: 1.
+        agg: 'mean'
+    wgf_gmm_params:
+        lambda_reg: 0.5       # Strong Wasserstein regularization
+        lr_mean: 0.05         # Higher learning rate for means
+        lr_cov: 0.005         # Higher learning rate for covariances
+        lr_weight: 0.02       # Higher learning rate for weights
+    extra_alg:
+        mc_n_samples: 250
+
+# GMM-PVI (simplified version)
+gmm_pvi:
+    algorithm: 'gmm_pvi'
+    model: 
+        use_particles: True
+        n_particles: 100
+        <<: *default_parameters
+    theta_opt:
+        <<: *default_theta_lr
+        optimizer: 'rmsprop'
+        lr_decay: False
+        regularization: 1e-8
+        clip: False
+    r_opt:
+        lr: 1e-2
+        regularization: 1e-8
+    r_precon:
+        type: 'rms'
+        max_norm: 1.
+        agg: 'mean'
+    extra_alg:
+        mc_n_samples: 250
+
+# Quick test configuration with smaller parameters
+wgf_gmm_quick_test:
+    algorithm: 'wgf_gmm'
+    model: 
+        use_particles: True
+        n_particles: 20       # Small for quick testing
+        d_z: 2
+        kernel: 'norm_fixed_var_w_skip'
+        n_hidden: 128         # Smaller network
+    theta_opt:
+        lr: 1e-4
+        optimizer: 'rmsprop'
+        lr_decay: False
+        regularization: 1e-8
+        clip: False
+    r_opt:
+        lr: 1e-2
+        regularization: 1e-8
+    r_precon:
+        type: 'rms'
+        max_norm: 1.
+        agg: 'mean'
+    wgf_gmm_params:
+        lambda_reg: 0.1
+        lr_mean: 0.01
+        lr_cov: 0.001
+        lr_weight: 0.01
+    extra_alg:
+        mc_n_samples: 50      # Small for quick testing
