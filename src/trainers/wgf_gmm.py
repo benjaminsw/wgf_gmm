@@ -520,7 +520,7 @@ def compute_gmm_gradients(key: jax.random.PRNGKey,
                          hyperparams: PIDParameters,
                          lambda_reg: float = 0.1) -> Tuple[list, list, jax.Array]:
     """
-    Compute gradients for GMM parameters using REINFORCE/reparameterization.
+    Compute gradients for GMM parameters using REINFORCE currently/ as for reparameterization through Gumbel-Softmax(???)
     
     Returns:
         Tuple of (mean_grads, cov_grads, weight_grads)
@@ -696,3 +696,12 @@ def wgf_gmm_pvi_step(key: jax.random.PRNGKey,
     updated_carry.gmm_state = updated_gmm_state
     
     return lval, updated_carry
+
+
+
+# contribute 3
+# drop during training:
+# Use a sparsity penalty (e.g., encourage some weights to go to zero),
+# Use Dirichlet priors that push some weights down,
+# Gradually fade out low-importance components (soft masking)
+# WGMM???
