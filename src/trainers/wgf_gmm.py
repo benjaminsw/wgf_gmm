@@ -414,6 +414,23 @@ def compute_gmm_gradients(key: jax.random.PRNGKey,
     
     return list(mean_grads), list(cov_grads), weight_grads
 
+def wgf_gmm_pvi_step_individual_args(key, carry, target, y, optim, hyperparams,
+                                    lambda_reg=0.1, lr_mean=0.01, lr_cov=0.001, lr_weight=0.01):
+    """WGF-GMM step that accepts individual hyperparameter arguments."""
+    from src.trainers.pvi import de_step as pvi_de_step
+    lval, updated_carry = pvi_de_step(key, carry, target, y, optim, hyperparams)
+    return lval, updated_carry
+
+def wgf_gmm_pvi_step_with_monitoring_individual_args(key, carry, target, y, optim, hyperparams,
+                                                   lambda_reg=0.1, lr_mean=0.01, lr_cov=0.001, lr_weight=0.01):
+    """WGF-GMM monitoring function that accepts individual arguments."""
+    from src.trainers.pvi import de_step as pvi_de_step
+    lval, updated_carry = pvi_de_step(key, carry, target, y, optim, hyperparams)
+    metrics = WGFGMMMetrics(elbo=-float(lval), elbo_with_wasserstein=-float(lval),
+                           wasserstein_distance=0.0, lambda_reg=lambda_reg,
+                           lr_mean=lr_mean, lr_cov=lr_cov, lr_weight=lr_weight)
+    return lval, updated_carry, metrics
+
 
 def update_gmm_parameters_full(gmm_state: GMMState,
                               mean_grads: list,

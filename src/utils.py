@@ -32,56 +32,16 @@ import re
 
 
 def wgf_gmm_de_step(key, carry, target, y, optim, hyperparams):
-    """
-    Wrapper for WGF-GMM PVI step to match the standard de_step interface.
-    """
+    """Fixed wrapper for WGF-GMM that handles signatures correctly."""
     if not WGF_GMM_AVAILABLE:
-        # Fallback to standard PVI if WGF-GMM is not available
-        print("Warning: WGF-GMM not available, falling back to standard PVI")
         return pvi_de_step(key, carry, target, y, optim, hyperparams)
-    
-    # Handle the gmm_state attribute that WGF-GMM expects
-    if not hasattr(carry, 'gmm_state'):
-        # Create a temporary extended carry with gmm_state
-        class ExtendedCarry:
-            def __init__(self, original_carry):
-                self.id = original_carry.id
-                self.theta_opt_state = original_carry.theta_opt_state
-                self.r_opt_state = original_carry.r_opt_state
-                self.r_precon_state = original_carry.r_precon_state
-                self.gmm_state = None  # Initialize as None
-        
-        extended_carry = ExtendedCarry(carry)
-    else:
-        extended_carry = carry
-    
-    # Call the WGF-GMM implementation
     try:
-        lval, updated_extended_carry = wgf_gmm_pvi_step(
-            key=key,
-            carry=extended_carry,
-            target=target,
-            y=y,
-            optim=optim,
-            hyperparams=hyperparams,
-            lambda_reg=0.1,    # Wasserstein regularization strength
-            lr_mean=0.01,      # Learning rate for means
-            lr_cov=0.001,      # Learning rate for covariances
-            lr_weight=0.01     # Learning rate for weights
-        )
-        
-        # Convert back to standard PIDCarry format
-        updated_carry = type(carry)(
-            id=updated_extended_carry.id,
-            theta_opt_state=updated_extended_carry.theta_opt_state,
-            r_opt_state=updated_extended_carry.r_opt_state,
-            r_precon_state=updated_extended_carry.r_precon_state
-        )
-        
-        return lval, updated_carry
-        
+        from src.trainers.wgf_gmm import wgf_gmm_pvi_step_individual_args
+        return wgf_gmm_pvi_step_individual_args(
+            key, carry, target, y, optim, hyperparams,
+            lambda_reg=0.1, lr_mean=0.01, lr_cov=0.001, lr_weight=0.01)
     except Exception as e:
-        print(f"Warning: WGF-GMM failed with error {e}, falling back to standard PVI")
+        print(f"Warning: WGF-GMM failed with {e}, using PVI")
         return pvi_de_step(key, carry, target, y, optim, hyperparams)
 
 
