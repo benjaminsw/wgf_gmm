@@ -568,7 +568,15 @@ def wgf_gmm_pvi_step(key: jax.random.PRNGKey,
     )
     
     # Store GMM state in carry
-    updated_carry.gmm_state = updated_gmm_state
+    class WGFGMMCarry:
+        def __init__(self, pid_carry, gmm_state=None):
+            self.id = pid_carry.id
+            self.theta_opt_state = pid_carry.theta_opt_state
+            self.r_opt_state = pid_carry.r_opt_state
+            self.r_precon_state = pid_carry.r_precon_state
+            self.gmm_state = gmm_state
+
+    return lval, WGFGMMCarry(updated_carry, updated_gmm_state)
     
     return lval, updated_carry
 
