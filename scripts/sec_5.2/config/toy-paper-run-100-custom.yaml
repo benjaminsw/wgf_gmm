@@ -1,0 +1,62 @@
+default_parameters: &default_parameters
+    d_z: 2
+    kernel: 'norm_fixed_var_w_skip'
+    n_hidden: 512
+
+default_theta_lr: &default_theta_lr
+    lr: 1e-4
+
+experiment:
+    n_reruns: 10
+    n_updates: 15000        # Your desired iterations
+    name: 'default'
+    compute_metrics: False
+    use_jit: True
+
+pvi:
+    algorithm: 'pvi'
+    model: 
+        use_particles: True
+        n_particles: 100
+        <<: *default_parameters
+    theta_opt:
+        <<: *default_theta_lr
+        optimizer: 'rmsprop'
+        lr_decay: False
+        regularization: 1e-8
+        clip: False
+    r_opt:
+        lr: 1e-2
+        regularization: 1e-8
+    extra_alg:
+        mc_n_samples: 250
+
+wgf_gmm:
+    algorithm: 'wgf_gmm'
+    model: 
+        use_particles: True
+        n_particles: 100
+        n_components: 100
+        <<: *default_parameters
+    theta_opt:
+        <<: *default_theta_lr
+        optimizer: 'rmsprop'
+        lr_decay: False
+        regularization: 1e-8
+        clip: False
+    r_opt:
+        lr: 1e-2
+        regularization: 1e-8
+    r_precon:
+        type: 'rms'
+        max_norm: 1.
+        agg: 'mean'
+    wgf_gmm_params:
+        lambda_reg: 0.5      # Your λ value
+        lr_mean: 0.05        # Your lr_mean value  
+        lr_cov: 0.001        # Your lr_cov value
+        lr_weight: 0.01      # Your lr_weight value
+    extra_alg:
+        mc_n_samples: 250
+
+# Include other algorithms as needed (svi, uvi, sm, gmm_pvi)...
