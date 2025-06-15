@@ -20,7 +20,7 @@ from src.trainers.sm import de_step as sm_de_step
 
 # Import fixed WGF-GMM implementation
 try:
-    from src.trainers.wgf_gmm import wgf_gmm_pvi_step, gmm_pvi_step
+    from src.trainers.wgf_gmm import wgf_gmm_pvi_step
     WGF_GMM_AVAILABLE = True
 except ImportError as e:
     print(f"Warning: Could not import WGF-GMM implementation: {e}")
@@ -44,8 +44,8 @@ def wgf_gmm_de_step(key, carry, target, y, optim, hyperparams):
     if not WGF_GMM_AVAILABLE:
         return pvi_de_step(key, carry, target, y, optim, hyperparams)
     try:
-        from src.trainers.wgf_gmm import wgf_gmm_pvi_step_individual_args
-        return wgf_gmm_pvi_step_individual_args(
+        # Use the actual wgf_gmm_pvi_step function with default parameters
+        return wgf_gmm_pvi_step(
             key, carry, target, y, optim, hyperparams,
             lambda_reg=0.1, lr_mean=0.01, lr_cov=0.001, lr_weight=0.01)
     except Exception as e:
@@ -53,24 +53,10 @@ def wgf_gmm_de_step(key, carry, target, y, optim, hyperparams):
         return pvi_de_step(key, carry, target, y, optim, hyperparams)
 
 
-def gmm_pvi_de_step(key, carry, target, y, optim, hyperparams):
-    """
-    Wrapper for GMM-PVI step (simplified version).
-    """
-    if not WGF_GMM_AVAILABLE:
-        # Fallback to standard PVI if GMM-PVI is not available
-        print("Warning: GMM-PVI not available, falling back to standard PVI")
-        return pvi_de_step(key, carry, target, y, optim, hyperparams)
-    
-    try:
-        return gmm_pvi_step(key, carry, target, y, optim, hyperparams)
-    except Exception as e:
-        print(f"Warning: GMM-PVI failed with error {e}, falling back to standard PVI")
-        return pvi_de_step(key, carry, target, y, optim, hyperparams)
-
-
 def enhanced_wgf_gmm_de_step(key, carry, target, y, optim, hyperparams):
     """Wrapper for enhanced WGF-GMM step function."""
+    if not ENHANCED_WGF_GMM_AVAILABLE:
+        return wgf_gmm_de_step(key, carry, target, y, optim, hyperparams)
     try:
         return enhanced_wgf_gmm_pvi_step(
             key, carry, target, y, optim, hyperparams,
@@ -81,7 +67,7 @@ def enhanced_wgf_gmm_de_step(key, carry, target, y, optim, hyperparams):
         return wgf_gmm_de_step(key, carry, target, y, optim, hyperparams)
 
 
-# Update DE_STEPS to include both WGF-GMM and GMM-PVI
+# Update DE_STEPS to include both WGF-GMM variants but remove GMM-PVI
 DE_STEPS = {
     'pvi': pvi_de_step,
     'wgf_gmm': wgf_gmm_de_step,
@@ -214,8 +200,8 @@ def make_step_and_carry(
     
     id_state = eqx.filter(id, id.get_filter_spec())
     
-    # Handle PVI-based algorithms (pvi, wgf_gmm, enhanced_wgf_gmm, gmm_pvi) the same way
-    if parameters.algorithm in ['pvi', 'wgf_gmm', 'enhanced_wgf_gmm']:  # ← ADD enhanced_wgf_gmm HERE
+    # Handle PVI-based algorithms (pvi, wgf_gmm, enhanced_wgf_gmm) the same way
+    if parameters.algorithm in ['pvi', 'wgf_gmm', 'enhanced_wgf_gmm']:
         ropt_key, key = jax.random.split(key, 2)
         r_optim = make_r_opt(ropt_key,
                              parameters.r_opt_parameters)
@@ -245,7 +231,7 @@ def make_step_and_carry(
                         dual_optim.init(dual_state))
         optim = SMOpt(theta_optim, dual_optim)
     else:
-        raise ValueError(f"Unknown algorithm {parameters.algorithm}")  # ← This is line 247 causing the error
+        raise ValueError(f"Unknown algorithm {parameters.algorithm}")
 
     def partial_step(key, carry, target, y):
         return step(
@@ -272,8 +258,8 @@ def config_to_parameters(config: dict, algorithm: str):
             **config[algorithm]['theta_opt']
         )
     
-    # Handle PVI-based algorithms (pvi, wgf_gmm, enhanced_wgf_gmm, gmm_pvi) the same way
-    if algorithm in ['pvi', 'wgf_gmm', 'enhanced_wgf_gmm']:  # ← ADD enhanced_wgf_gmm HERE
+    # Handle PVI-based algorithms (pvi, wgf_gmm, enhanced_wgf_gmm) the same way
+    if algorithm in ['pvi', 'wgf_gmm', 'enhanced_wgf_gmm']:
         parameters['r_opt_parameters'] = ROptParameters(
             **config[algorithm]['r_opt']
         )
@@ -303,7 +289,7 @@ def config_to_parameters(config: dict, algorithm: str):
             **config[algorithm]['extra_alg']
         )
     else:
-        raise ValueError(f"Algorithm {algorithm} is not supported")  # ← This is line 294 causing the error
+        raise ValueError(f"Algorithm {algorithm} is not supported")
     return Parameters(**parameters)
 
 

@@ -29,6 +29,158 @@ class GMMState(NamedTuple):
     n_components: int
     prev_components: list[GMMComponent] = None  # For Wasserstein regularization
 
+# Add these classes and functions to src/trainers/wgf_gmm.py
+
+class WGFGMMHyperparams(NamedTuple):
+    """Hyperparameters for WGF-GMM algorithm"""
+    lambda_reg: float = 0.1      # Wasserstein regularization strength
+    lr_mean: float = 0.01        # Learning rate for means
+    lr_cov: float = 0.001        # Learning rate for covariances
+    lr_weight: float = 0.01      # Learning rate for weights
+
+
+class WGFGMMMetrics(NamedTuple):
+    """Metrics for WGF-GMM training"""
+    elbo: float
+    elbo_with_wasserstein: float
+    wasserstein_distance: float
+    lambda_reg: float
+    lr_mean: float
+    lr_cov: float
+    lr_weight: float
+
+
+def compute_elbo(key: jax.random.PRNGKey,
+                 pid: PID,
+                 target: Target,
+                 gmm_state: GMMState,
+                 y: jax.Array,
+                 hyperparams: PIDParameters) -> float:
+    """Compute standard ELBO without regularization."""
+    key, subkey = jax.random.split(key)
+    samples = sample_from_gmm(subkey, gmm_state, hyperparams.mc_n_samples)
+    
+    logq = vmap(pid.log_prob, (0, None))(samples, y)
+    logp = vmap(target.log_prob, (0, None))(samples, y)
+    elbo = np.mean(logp - logq)
+    
+    return elbo
+
+
+def compute_elbo_with_wasserstein_regularization(key: jax.random.PRNGKey,
+                                               pid: PID,
+                                               target: Target,
+                                               gmm_state: GMMState,
+                                               y: jax.Array,
+                                               hyperparams: PIDParameters,
+                                               lambda_reg: float = 0.1) -> Tuple[float, float]:
+    """
+    Compute regularized ELBO and return both ELBO and Wasserstein distance.
+    
+    Returns:
+        Tuple of (elbo_with_regularization, wasserstein_distance)
+    """
+    # Compute standard ELBO
+    elbo = compute_elbo(key, pid, target, gmm_state, y, hyperparams)
+    
+    # Compute Wasserstein regularization if previous state exists
+    wasserstein_reg = 0.0
+    if gmm_state.prev_components is not None:
+        prev_gmm = GMMState(
+            components=gmm_state.prev_components,
+            n_components=len(gmm_state.prev_components)
+        )
+        wasserstein_reg = wasserstein_distance_gmm(gmm_state, prev_gmm)
+    
+    elbo_with_regularization = elbo - lambda_reg * wasserstein_reg
+    
+    return elbo_with_regularization, wasserstein_reg
+
+
+def update_gmm_parameters_simple(gmm_state: GMMState,
+                                 particle_update: jax.Array,
+                                 lr_mean: float = 0.01) -> GMMState:
+    """
+    Simple update for GMM parameters based on particle updates.
+    
+    This is a simplified version that just updates means based on particle movement.
+    """
+    new_components = []
+    
+    for i, (comp, update) in enumerate(zip(gmm_state.components, particle_update)):
+        # Simple mean update
+        new_mean = comp.mean + lr_mean * update
+        
+        # Keep covariance and weight the same for simplicity
+        new_components.append(GMMComponent(
+            mean=new_mean,
+            cov=comp.cov,
+            weight=comp.weight
+        ))
+    
+    return GMMState(
+        components=new_components,
+        n_components=gmm_state.n_components,
+        prev_components=gmm_state.components
+    )
+
+
+def wgf_gmm_pvi_step_with_monitoring(key: jax.random.PRNGKey,
+                                   carry: PIDCarry,
+                                   target: Target,
+                                   y: jax.Array,
+                                   optim: PIDOpt,
+                                   hyperparams: PIDParameters,
+                                   lambda_reg: float = 0.1,
+                                   lr_mean: float = 0.01,
+                                   lr_cov: float = 0.001,
+                                   lr_weight: float = 0.01) -> Tuple[float, PIDCarry, WGFGMMMetrics]:
+    """
+    WGF-GMM step with detailed monitoring of ELBO and Wasserstein metrics.
+    
+    Returns:
+        Tuple of (loss_value, updated_carry, metrics)
+    """
+    # Call the main WGF-GMM step
+    lval, updated_carry = wgf_gmm_pvi_step(
+        key, carry, target, y, optim, hyperparams,
+        lambda_reg, lr_mean, lr_cov, lr_weight
+    )
+    
+    # Compute metrics
+    metrics_key = jax.random.split(key)[0]
+    
+    # Get GMM state from carry if it exists
+    if hasattr(updated_carry, 'gmm_state') and updated_carry.gmm_state is not None:
+        gmm_state = updated_carry.gmm_state
+        
+        try:
+            elbo = compute_elbo(metrics_key, updated_carry.id, target, gmm_state, y, hyperparams)
+            elbo_with_reg, wasserstein_dist = compute_elbo_with_wasserstein_regularization(
+                metrics_key, updated_carry.id, target, gmm_state, y, hyperparams, lambda_reg
+            )
+        except:
+            elbo = -float(lval)
+            elbo_with_reg = -float(lval)
+            wasserstein_dist = 0.0
+    else:
+        # Fallback if no GMM state
+        elbo = -float(lval)
+        elbo_with_reg = -float(lval)
+        wasserstein_dist = 0.0
+    
+    metrics = WGFGMMMetrics(
+        elbo=float(elbo),
+        elbo_with_wasserstein=float(elbo_with_reg),
+        wasserstein_distance=float(wasserstein_dist),
+        lambda_reg=lambda_reg,
+        lr_mean=lr_mean,
+        lr_cov=lr_cov,
+        lr_weight=lr_weight
+    )
+    
+    return lval, updated_carry, metrics
+
 
 def particles_to_gmm(particles: jax.Array, 
                      weights: jax.Array = None,

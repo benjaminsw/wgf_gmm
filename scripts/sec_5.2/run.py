@@ -26,7 +26,8 @@ PROBLEMS = {
     'xshape': XShape,
 }
 
-ALGORITHMS = ['enhanced_wgf_gmm', 'wgf_gmm', 'pvi'] #, 'sm', 'svi', 'uvi']
+# Updated ALGORITHMS list - removed gmm_pvi
+ALGORITHMS = ['enhanced_wgf_gmm', 'wgf_gmm', 'pvi']  # Removed 'sm', 'svi', 'uvi' and 'gmm_pvi'
 
 def visualize(key, 
               ids,
@@ -208,6 +209,11 @@ def run(config_name: str,
             path.mkdir(parents=True, exist_ok=True)
 
             for algo in ALGORITHMS:
+                # Check if algorithm exists in config
+                if algo not in config:
+                    print(f"Warning: Algorithm {algo} not found in config, skipping")
+                    continue
+                    
                 m_key, key = jax.random.split(key, 2)
                 parameters = config_to_parameters(config, algo)
                 step, carry = make_step_and_carry(
@@ -301,22 +307,23 @@ def run(config_name: str,
     if compute_metrics:
         for prob_name, problem in PROBLEMS.items():
             for algo in ALGORITHMS:
-                for metric_name, run in histories[prob_name][algo].items():
-                    run = np.stack(run, axis=0)
-                    assert run.shape == (n_rerun, n_updates)
-                    last = run[:, -1]
-                    if len(histories) > 1:
-                        mean = np.mean(last, axis=-1)
-                        std = np.std(last, axis=-1) 
-                    else:
-                        mean = last[0]
-                        std = 0
-                    print(f"{algo} on {prob_name} with {metric_name} has mean {mean:.3f} and std {std:.3f}")
+                if algo in histories[prob_name]:
+                    for metric_name, run in histories[prob_name][algo].items():
+                        run = np.stack(run, axis=0)
+                        assert run.shape == (n_rerun, n_updates)
+                        last = run[:, -1]
+                        if len(histories) > 1:
+                            mean = np.mean(last, axis=-1)
+                            std = np.std(last, axis=-1) 
+                        else:
+                            mean = last[0]
+                            std = 0
+                        print(f"{algo} on {prob_name} with {metric_name} has mean {mean:.3f} and std {std:.3f}")
     
     for prob_name, problem in PROBLEMS.items():
         for algo in ALGORITHMS:
             if algo in results[prob_name].keys():
-                for met_name, run in  results[prob_name][algo].items():
+                for met_name, run in results[prob_name][algo].items():
                     if len(run) > 1:
                         run = np.stack(run, axis=-1)
                         mean = np.mean(run, axis=-1)

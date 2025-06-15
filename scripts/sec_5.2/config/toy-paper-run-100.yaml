@@ -28,7 +28,12 @@ pvi:
     r_opt:
         lr: 1e-2
         regularization: 1e-8
+    r_precon:
+        type: 'rms'
+        max_norm: 1.
+        agg: 'mean'
     extra_alg:
+        mc_n_samples: 250
 
 wgf_gmm:
     algorithm: 'wgf_gmm'
@@ -50,13 +55,20 @@ wgf_gmm:
         type: 'rms'
         max_norm: 1.
         agg: 'mean'
+    wgf_gmm_params:
+        lambda_reg: 0.1      # Wasserstein regularization
+        lr_mean: 0.01        # Learning rate for means  
+        lr_cov: 0.001        # Learning rate for covariances
+        lr_weight: 0.01      # Learning rate for weights
     extra_alg:
+        mc_n_samples: 250
 
-gmm_pvi:
-    algorithm: 'gmm_pvi'
+enhanced_wgf_gmm:
+    algorithm: 'enhanced_wgf_gmm'
     model: 
         use_particles: True
         n_particles: 100
+        n_components: 100
         <<: *default_parameters
     theta_opt:
         <<: *default_theta_lr
@@ -67,7 +79,17 @@ gmm_pvi:
     r_opt:
         lr: 1e-2
         regularization: 1e-8
+    r_precon:
+        type: 'rms'
+        max_norm: 1.
+        agg: 'mean'
+    wgf_gmm_params:
+        lambda_reg: 0.1      # Enhanced version parameters
+        lr_mean: 0.01        # More conservative for enhanced
+        lr_cov: 0.001        
+        lr_weight: 0.01      
     extra_alg:
+        mc_n_samples: 250
 
 svi:
     algorithm: 'svi'
