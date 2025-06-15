@@ -26,6 +26,14 @@ except ImportError as e:
     print(f"Warning: Could not import WGF-GMM implementation: {e}")
     WGF_GMM_AVAILABLE = False
 
+# Import enhanced WGF-GMM implementation
+try:
+    from src.trainers.enhanced_wgf_gmm import enhanced_wgf_gmm_pvi_step
+    ENHANCED_WGF_GMM_AVAILABLE = True
+except ImportError as e:
+    print(f"Warning: Could not import enhanced WGF-GMM implementation: {e}")
+    ENHANCED_WGF_GMM_AVAILABLE = False
+
 import equinox as eqx
 import yaml
 import re
@@ -61,11 +69,23 @@ def gmm_pvi_de_step(key, carry, target, y, optim, hyperparams):
         return pvi_de_step(key, carry, target, y, optim, hyperparams)
 
 
+def enhanced_wgf_gmm_de_step(key, carry, target, y, optim, hyperparams):
+    """Wrapper for enhanced WGF-GMM step function."""
+    try:
+        return enhanced_wgf_gmm_pvi_step(
+            key, carry, target, y, optim, hyperparams,
+            lambda_reg=0.1, lr_mean=0.01, lr_cov=0.001, lr_weight=0.01
+        )
+    except Exception as e:
+        print(f"Warning: enhanced_wgf_gmm failed with {e}, falling back to wgf_gmm")
+        return wgf_gmm_de_step(key, carry, target, y, optim, hyperparams)
+
+
 # Update DE_STEPS to include both WGF-GMM and GMM-PVI
 DE_STEPS = {
     'pvi': pvi_de_step,
     'wgf_gmm': wgf_gmm_de_step,
-    'gmm_pvi': gmm_pvi_de_step,
+    'enhanced_wgf_gmm': enhanced_wgf_gmm_de_step, 
     'svi': svi_de_step,
     'uvi': uvi_de_step,
     'sm': sm_de_step
@@ -194,8 +214,8 @@ def make_step_and_carry(
     
     id_state = eqx.filter(id, id.get_filter_spec())
     
-    # Handle PVI-based algorithms (pvi, wgf_gmm, gmm_pvi) the same way
-    if parameters.algorithm in ['pvi', 'wgf_gmm', 'gmm_pvi']:
+    # Handle PVI-based algorithms (pvi, wgf_gmm, enhanced_wgf_gmm, gmm_pvi) the same way
+    if parameters.algorithm in ['pvi', 'wgf_gmm', 'enhanced_wgf_gmm']:  # ← ADD enhanced_wgf_gmm HERE
         ropt_key, key = jax.random.split(key, 2)
         r_optim = make_r_opt(ropt_key,
                              parameters.r_opt_parameters)
@@ -225,7 +245,7 @@ def make_step_and_carry(
                         dual_optim.init(dual_state))
         optim = SMOpt(theta_optim, dual_optim)
     else:
-        raise ValueError(f"Unknown algorithm {parameters.algorithm}")
+        raise ValueError(f"Unknown algorithm {parameters.algorithm}")  # ← This is line 247 causing the error
 
     def partial_step(key, carry, target, y):
         return step(
@@ -252,8 +272,8 @@ def config_to_parameters(config: dict, algorithm: str):
             **config[algorithm]['theta_opt']
         )
     
-    # Handle PVI-based algorithms (pvi, wgf_gmm, gmm_pvi) the same way
-    if algorithm in ['pvi', 'wgf_gmm', 'gmm_pvi']:
+    # Handle PVI-based algorithms (pvi, wgf_gmm, enhanced_wgf_gmm, gmm_pvi) the same way
+    if algorithm in ['pvi', 'wgf_gmm', 'enhanced_wgf_gmm']:  # ← ADD enhanced_wgf_gmm HERE
         parameters['r_opt_parameters'] = ROptParameters(
             **config[algorithm]['r_opt']
         )
@@ -283,7 +303,7 @@ def config_to_parameters(config: dict, algorithm: str):
             **config[algorithm]['extra_alg']
         )
     else:
-        raise ValueError(f"Algorithm {algorithm} is not supported")
+        raise ValueError(f"Algorithm {algorithm} is not supported")  # ← This is line 294 causing the error
     return Parameters(**parameters)
 
 
