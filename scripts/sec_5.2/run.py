@@ -26,7 +26,7 @@ PROBLEMS = {
     'xshape': XShape,
 }
 
-ALGORITHMS = ['wgf_gmm','pvi'] #, 'sm', 'svi', 'uvi']
+ALGORITHMS = ['enhanced_wgf_gmm', 'wgf_gmm', 'pvi'] #, 'sm', 'svi', 'uvi']
 
 def visualize(key, 
               ids,
