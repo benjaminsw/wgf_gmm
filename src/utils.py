@@ -60,7 +60,13 @@ def enhanced_wgf_gmm_de_step(key, carry, target, y, optim, hyperparams):
     try:
         return enhanced_wgf_gmm_pvi_step(
             key, carry, target, y, optim, hyperparams,
-            lambda_reg=0.1, lr_mean=0.01, lr_cov=0.001, lr_weight=0.01
+            lambda_reg=0.1, 
+            weight_reg=0.01,     # Dirichlet regularization
+            lr_mean=0.01, 
+            lr_cov=0.001, 
+            lr_alpha=0.01,       # <- Change lr_weight to lr_alpha
+            use_component_management=True,
+            sparsity_threshold=0.05
         )
     except Exception as e:
         print(f"Warning: enhanced_wgf_gmm failed with {e}, falling back to wgf_gmm")
